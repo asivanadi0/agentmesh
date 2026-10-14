@@ -45,10 +45,6 @@ type Backoff struct {
 // plane's limiter of ten a second. A larger fleet starts in waves.
 var DefaultEnrollBackoff = Backoff{Initial: time.Second, Max: 15 * time.Second, Budget: 3 * time.Minute}
 
-// after is the wait between attempts. A test swaps it for a virtual clock so
-// minutes of backoff run in milliseconds.
-var after = time.After
-
 // DoWithChallengeRetry is DoWithChallenge for a request the control plane
 // may answer with 429 or 503. Such an answer is retried after Retry-After
 // when the control plane names a wait, and after the backoff's own delay
@@ -84,7 +80,7 @@ func DoWithChallengeRetry(ctx context.Context, httpClient *http.Client, now func
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-after(wait):
+		case <-time.After(wait):
 		}
 	}
 }

@@ -15,87 +15,19 @@
 package client
 
 import (
-	"container/heap"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/time/rate"
 
 	"github.com/google/agentmesh/internal/controlplane"
 )
-
-// fleetClock is a virtual clock shared by a fleet of callers. Time stands
-// still while any caller is working and jumps to the earliest pending wait
-// once every caller is either waiting or done, so the run is the same
-// sequence of events a real fleet would see, without the real waits.
-type fleetClock struct {
-	mu      sync.Mutex
-	now     time.Time
-	active  int
-	waiters waitHeap
-}
-
-type fleetWaiter struct {
-	at time.Time
-	ch chan time.Time
-}
-
-// waitHeap orders pending waits by wake time.
-type waitHeap []fleetWaiter
-
-func (h waitHeap) Len() int           { return len(h) }
-func (h waitHeap) Less(i, j int) bool { return h[i].at.Before(h[j].at) }
-func (h waitHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *waitHeap) Push(x any)        { *h = append(*h, x.(fleetWaiter)) }
-func (h *waitHeap) Pop() any {
-	old := *h
-	w := old[len(old)-1]
-	*h = old[:len(old)-1]
-	return w
-}
-
-func (c *fleetClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
-}
-
-// after stands in for time.After: the caller stops being active until the
-// clock reaches its wake time.
-func (c *fleetClock) after(d time.Duration) <-chan time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	w := fleetWaiter{at: c.now.Add(d), ch: make(chan time.Time, 1)}
-	heap.Push(&c.waiters, w)
-	c.idle()
-	return w.ch
-}
-
-// done marks a caller that returned.
-func (c *fleetClock) done() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.idle()
-}
-
-func (c *fleetClock) idle() {
-	c.active--
-	if c.active > 0 || len(c.waiters) == 0 {
-		return
-	}
-	next := c.waiters[0].at
-	c.now = next
-	for len(c.waiters) > 0 && c.waiters[0].at.Equal(next) {
-		w := heap.Pop(&c.waiters).(fleetWaiter)
-		c.active++
-		w.ch <- next
-	}
-}
 
 // handlerTransport serves requests in process, so thousands of attempts
 // cost no sockets.
@@ -115,7 +47,8 @@ func (t handlerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // burst + rate x budget, and past that every member left over gets the
 // limiter's last 429 back before the budget runs out. It also checks that
 // jitter spreads the fleet out after a shared Retry-After instead of
-// bringing it back in lockstep.
+// bringing it back in lockstep. synctest runs the fleet on a fake clock, so
+// minutes of backoff take milliseconds.
 func TestDoWithChallengeRetryFleet(t *testing.T) {
 	retryAfterSecs := max(1, controlplane.EnrollBurst/controlplane.EnrollRateLimit)
 	tests := []struct {
@@ -128,91 +61,88 @@ func TestDoWithChallengeRetryFleet(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			start := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
-			clock := &fleetClock{now: start, active: tc.members}
-			prev := after
-			after = clock.after
-			t.Cleanup(func() { after = prev })
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
 
-			limiter := rate.NewLimiter(rate.Limit(controlplane.EnrollRateLimit), controlplane.EnrollBurst)
-			var mu sync.Mutex
-			retries := map[time.Time]int{}
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				now := clock.Now()
-				if r.Header.Get("X-Attempt") != "1" {
-					mu.Lock()
-					retries[now]++
-					mu.Unlock()
-				}
-				if !limiter.AllowN(now, 1) {
-					w.Header().Set("Retry-After", strconv.Itoa(retryAfterSecs))
-					http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-					return
-				}
-				w.WriteHeader(http.StatusOK)
-			})
-			httpClient := &http.Client{Transport: handlerTransport{h: handler}}
-
-			type result struct {
-				status int
-				at     time.Time
-			}
-			results := make([]result, tc.members)
-			var wg sync.WaitGroup
-			for i := range tc.members {
-				wg.Go(func() {
-					defer clock.done()
-					attempt := 0
-					resp, err := DoWithChallengeRetry(context.Background(), httpClient, clock.Now, tc.backoff, func(ts int64) (*http.Request, error) {
-						attempt++
-						req, err := http.NewRequest(http.MethodPost, "http://control-plane.test/enroll", nil)
-						if err == nil {
-							req.Header.Set("X-Attempt", strconv.Itoa(attempt))
-						}
-						return req, err
-					})
-					if err != nil {
-						t.Errorf("member %d: %v", i, err)
+				limiter := rate.NewLimiter(rate.Limit(controlplane.EnrollRateLimit), controlplane.EnrollBurst)
+				var mu sync.Mutex
+				retries := map[time.Time]int{}
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					now := time.Now()
+					if r.Header.Get("X-Attempt") != "1" {
+						mu.Lock()
+						retries[now]++
+						mu.Unlock()
+					}
+					if !limiter.AllowN(now, 1) {
+						w.Header().Set("Retry-After", strconv.Itoa(retryAfterSecs))
+						http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 						return
 					}
-					_ = resp.Body.Close()
-					results[i] = result{status: resp.StatusCode, at: clock.Now()}
+					w.WriteHeader(http.StatusOK)
 				})
-			}
-			wg.Wait()
+				httpClient := &http.Client{Transport: handlerTransport{h: handler}}
 
-			deadline := start.Add(tc.backoff.Budget)
-			capacity := controlplane.EnrollBurst + int(float64(controlplane.EnrollRateLimit)*tc.backoff.Budget.Seconds())
-			admitted := 0
-			for i, r := range results {
-				if r.at.After(deadline) {
-					t.Errorf("member %d returned at %v, after the %v budget", i, r.at.Sub(start), tc.backoff.Budget)
+				type result struct {
+					status int
+					at     time.Time
 				}
-				switch r.status {
-				case http.StatusOK:
-					admitted++
-				case http.StatusTooManyRequests:
-				default:
-					t.Errorf("member %d got status %d, want 200 or 429", i, r.status)
+				results := make([]result, tc.members)
+				var wg sync.WaitGroup
+				for i := range tc.members {
+					wg.Go(func() {
+						attempt := 0
+						resp, err := DoWithChallengeRetry(context.Background(), httpClient, time.Now, tc.backoff, func(ts int64) (*http.Request, error) {
+							attempt++
+							req, err := http.NewRequest(http.MethodPost, "http://control-plane.test/enroll", nil)
+							if err == nil {
+								req.Header.Set("X-Attempt", strconv.Itoa(attempt))
+							}
+							return req, err
+						})
+						if err != nil {
+							t.Errorf("member %d: %v", i, err)
+							return
+						}
+						_ = resp.Body.Close()
+						results[i] = result{status: resp.StatusCode, at: time.Now()}
+					})
 				}
-			}
-			if tc.members <= capacity && admitted != tc.members {
-				t.Errorf("admitted %d of %d members within %v, want all (capacity %d)", admitted, tc.members, tc.backoff.Budget, capacity)
-			}
-			if tc.members > capacity && (admitted == tc.members || admitted > capacity) {
-				t.Errorf("admitted %d of %d members, want between 1 and capacity %d with the rest refused", admitted, tc.members, capacity)
-			}
+				wg.Wait()
 
-			// Everyone refused at the start is told the same Retry-After; with
-			// jitter the retries land on many instants, not one.
-			busiest, total := 0, 0
-			for _, n := range retries {
-				busiest = max(busiest, n)
-				total += n
-			}
-			if total == 0 || busiest*10 > total {
-				t.Errorf("busiest retry instant took %d of %d retries, want the fleet spread out", busiest, total)
-			}
+				deadline := start.Add(tc.backoff.Budget)
+				capacity := controlplane.EnrollBurst + int(float64(controlplane.EnrollRateLimit)*tc.backoff.Budget.Seconds())
+				admitted := 0
+				for i, r := range results {
+					if r.at.After(deadline) {
+						t.Errorf("member %d returned at %v, after the %v budget", i, r.at.Sub(start), tc.backoff.Budget)
+					}
+					switch r.status {
+					case http.StatusOK:
+						admitted++
+					case http.StatusTooManyRequests:
+					default:
+						t.Errorf("member %d got status %d, want 200 or 429", i, r.status)
+					}
+				}
+				if tc.members <= capacity && admitted != tc.members {
+					t.Errorf("admitted %d of %d members within %v, want all (capacity %d)", admitted, tc.members, tc.backoff.Budget, capacity)
+				}
+				if tc.members > capacity && (admitted == tc.members || admitted > capacity) {
+					t.Errorf("admitted %d of %d members, want between 1 and capacity %d with the rest refused", admitted, tc.members, capacity)
+				}
+
+				// Everyone refused at the start is told the same Retry-After; with
+				// jitter the retries land on many instants, not one.
+				busiest, total := 0, 0
+				for _, n := range retries {
+					busiest = max(busiest, n)
+					total += n
+				}
+				if total == 0 || busiest*10 > total {
+					t.Errorf("busiest retry instant took %d of %d retries, want the fleet spread out", busiest, total)
+				}
+			})
 		})
 	}
 }
