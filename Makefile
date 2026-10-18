@@ -174,10 +174,10 @@ sdk-js:
 
 # py-libp2p pins coincurve 21.0.0, which ships no wheels past CPython 3.13
 # (libp2p/py-libp2p#1140), so the Python SDK installs on 3.11 to 3.13 only.
-# PYTHON defaults to the newest such interpreter on PATH, probed once when
-# the Makefile is read; override it with make sdk-python PYTHON=/path/to/python3.12.
+# PYTHON defaults to the newest such interpreter on PATH, probed lazily and
+# only once, on first use; override it with make sdk-python PYTHON=/path/to/python3.12.
 SDK_PYTHON_CHECK := import sys; sys.exit(not (3, 11) <= sys.version_info[:2] < (3, 14))
-SDK_PYTHON_AUTO := $(or $(firstword $(foreach p,python3.13 python3.12 python3.11 python3,$(shell $(p) -c '$(SDK_PYTHON_CHECK)' >/dev/null 2>&1 && echo $(p)))),python3)
+SDK_PYTHON_AUTO = $(eval SDK_PYTHON_AUTO := $(or $(firstword $(foreach p,python3.13 python3.12 python3.11 python3,$(shell $(p) -c '$(SDK_PYTHON_CHECK)' >/dev/null 2>&1 && echo $(p)))),python3))$(SDK_PYTHON_AUTO)
 PYTHON ?= $(SDK_PYTHON_AUTO)
 
 sdk-python:
