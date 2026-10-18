@@ -1,5 +1,7 @@
-{{- $pdb := .Values.controlPlane.podDisruptionBudget -}}
-{{- if and $pdb.enabled (gt (int .Values.controlPlane.replicaCount) 1) -}}
+{{- /*
+One replica gets no budget: maxUnavailable 1 would allow evicting it anyway.
+*/ -}}
+{{- if gt (int .Values.controlPlane.replicaCount) 1 -}}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -7,10 +9,10 @@ metadata:
   labels:
     {{- include "agentmesh.labels" . | nindent 4 }}
 spec:
-  {{- if not (kindIs "invalid" $pdb.minAvailable) }}
-  minAvailable: {{ $pdb.minAvailable }}
-  {{- else }}
-  maxUnavailable: {{ $pdb.maxUnavailable }}
+  maxUnavailable: 1
+  {{- if semverCompare ">=1.27-0" .Capabilities.KubeVersion.Version }}
+  # An unhealthy pod never blocks draining its node, even with the budget spent.
+  unhealthyPodEvictionPolicy: AlwaysAllow
   {{- end }}
   selector:
     matchLabels:

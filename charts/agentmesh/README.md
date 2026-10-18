@@ -130,15 +130,21 @@ There is no bundled Dex. Point `controlPlane.oidcIssuer` at your identity
 provider and register `https://<control-plane-hostname><consolePath>/auth/callback` as
 a redirect URI for the OIDC client the control plane reports.
 
-## Disruption budgets (`*.podDisruptionBudget`)
+## Disruption budget
 
-The control plane and the router each get a `PodDisruptionBudget` with
-`maxUnavailable: 1`, so a node drain or autoscaler scale-down evicts one pod
-at a time instead of all of them. A budget renders only when its component
-runs more than one replica: the default install covers the control plane
-(2 replicas) and leaves a single router as it is. Set
-`podDisruptionBudget.minAvailable` to use that form instead, or
-`podDisruptionBudget.enabled: false` to render none.
+When `controlPlane.replicaCount` is greater than 1 (the default is 2), the
+chart renders a `PodDisruptionBudget` with `maxUnavailable: 1` for the control
+plane, so a node drain or autoscaler scale-down evicts one control plane pod at
+a time instead of all of them. There is nothing to configure. On Kubernetes
+1.27 and later it also sets `unhealthyPodEvictionPolicy: AlwaysAllow`, so an
+unhealthy pod never blocks draining its node when the budget is spent.
+
+The bundled PostgreSQL StatefulSet runs a single replica and has no budget, so
+a drain can still take the database down. For full drain protection, use an
+external database.
+
+Routers get no budget. The mesh protocol handles their availability: a router
+that shuts down withdraws its lease and sends members to another router.
 
 ## Metrics (`monitoring.*`)
 
