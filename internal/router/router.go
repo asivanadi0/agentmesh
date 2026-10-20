@@ -51,7 +51,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -71,18 +70,6 @@ import (
 )
 
 var logger = golog.Logger("agentmesh-router")
-
-// startHooks is set only by tests in this package's test binary, through
-// export_test.go, and read once by Start. It is how a test observes per-peer
-// state inside libraries the router builds on; production never sets it.
-var startHooks struct {
-	// peerstore replaces the host's default in-memory peerstore, so a test
-	// can give it a clock it controls.
-	peerstore peerstore.Peerstore
-	// pubsubContext wraps the context gossipsub derives its per-peer
-	// contexts from.
-	pubsubContext func(context.Context) context.Context
-}
 
 // DefaultLowWaterMark is the low watermark for a high one: TrimShare below
 // it, so a trim sheds that share of the connections and no more.
@@ -541,9 +528,6 @@ func (r *Router) Start() (retErr error) {
 		return fmt.Errorf("failed to create resource manager: %w", err)
 	}
 	p2pOpts = append(p2pOpts, libp2p.ResourceManager(mgr))
-	if startHooks.peerstore != nil {
-		p2pOpts = append(p2pOpts, libp2p.Peerstore(startHooks.peerstore))
-	}
 
 	hostNode, err := libp2p.New(p2pOpts...)
 	if err != nil {
@@ -579,11 +563,7 @@ func (r *Router) Start() (retErr error) {
 
 	// Setup PubSub. StrictSign is the default; pinned because the event
 	// validator trusts msg.GetFrom().
-	pubsubCtx := r.ctx
-	if startHooks.pubsubContext != nil {
-		pubsubCtx = startHooks.pubsubContext(r.ctx)
-	}
-	ps, err := pubsub.NewGossipSub(pubsubCtx, gated, pubsub.WithMessageSignaturePolicy(pubsub.StrictSign))
+	ps, err := pubsub.NewGossipSub(r.ctx, gated, pubsub.WithMessageSignaturePolicy(pubsub.StrictSign))
 	if err != nil {
 		return err
 	}
