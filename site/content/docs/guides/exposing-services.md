@@ -31,8 +31,8 @@ one, so an agent with access to the node cannot make it publish a new
 backend. To change the services, edit the file and restart the node. The
 [node configuration reference](../../reference/node-config/) lists every key.
 
-A `name` must be a valid DNS-style label sequence (`db-reader`,
-`build.runner`), because the mesh uses it in URLs and in policy. A policy
+Write a `name` as dot-separated labels of letters, digits, `_` and `-`
+(`db-reader`, `build.runner`), because the mesh uses it in URLs and in policy. A policy
 grant refers to the pair `type://name`, so `mcp://calculator` in the policy
 means this service and no other.
 
@@ -64,10 +64,10 @@ and does not manage it:
     target_url: "http://127.0.0.1:7777/mcp"
 ```
 
-`command` and `target_url` are mutually exclusive. Before the node advertises
-a service of either kind, it probes the backend. A subprocess that needs more
-than two seconds to answer its first request is not advertised unless you
-raise `--backend-probe-timeout`.
+When both `command` and `target_url` are set, the node uses `target_url`.
+Before the node advertises a service of either kind, it probes the backend. A
+subprocess that needs more than two seconds to answer its first request is
+not advertised unless you raise `--backend-probe-timeout`.
 
 Callers see the whole tool list of the server. If a third-party server
 bundles tools that you do not want to offer, put a small MCP server in front

@@ -40,12 +40,12 @@ services:
 
 attenuation:
   rules:
-    - 'maintenance() <- time($t), $t > 2026-12-31T00:00:00Z;'
+    - 'maintenance(true) <- time($t), $t > 2026-12-31T00:00:00Z;'
   checks:
     - 'check if label("team", "platform");'
   policies:
     - 'deny if service("mcp", "filesystem"), group("contractors");'
-    - 'deny if maintenance();'
+    - 'deny if maintenance(true);'
 
 egress:
   require_labels:
@@ -59,10 +59,12 @@ does not know.
 
 ## `labels`
 
-A map of `key: value`. Keys are 1 to 63 characters from `[a-zA-Z0-9_.-]`.
-Values are non-empty, at most 255 characters, and contain no `,`, `=` or
-control characters, because the wire form is a comma-separated `key=value`
-list. A malformed label stops the node at start.
+A map of `key: value`, at most 64 entries. Keys are 1 to 63 characters from
+`[a-zA-Z0-9_.-]`. Values are non-empty and at most 255 characters. Values
+contain no `,` or `=`, because the wire form is a comma-separated `key=value`
+list. Values also contain no `"`, `\` or control characters, because the
+control plane writes the value into Datalog. A malformed label, or more than
+64 labels, stops the node at start.
 
 Labels are sent at enrollment. The control plane writes them into the node's
 credential as `label(key, value)` facts, but only if a role the node holds
@@ -77,7 +79,7 @@ A list. Each entry has these keys:
 | Key | Required | Meaning |
 |---|---|---|
 | `type` | yes | `mcp`, `inference` or `a2a`. `egress` is refused here: a destination outside the mesh is assigned to nodes by the control plane, in the [egress section](../policy/#egress-destinations) of the mesh policy. |
-| `name` | yes | Unique on this node. DNS-style labels separated by dots (`db-reader`, `build.runner`). Policy grants refer to `type://name`. |
+| `name` | yes | Dot-separated labels, each 1 to 63 characters of `[a-zA-Z0-9_-]` with no leading `-` (`db-reader`, `build.runner`). The node checks the name as a [service pattern](../policy/#service-patterns), so a wildcard form or a `/path` suffix passes too. A name serves one type. The node refuses a second type under the same name. A later entry with the same name and type replaces the earlier one. Policy grants refer to `type://name`. |
 | `description` | no | Shown in discovery results and in the console. |
 | `target_url` | `mcp`: this or `command`; `inference` and `a2a`: yes | Backend URL that the node proxies to. Embedded credentials (`http://user:pass@`) are refused. |
 | `command` | `mcp` only: this or `target_url` | Argument vector of a subprocess that speaks MCP over stdio. The node starts and supervises it. |
@@ -86,7 +88,8 @@ A list. Each entry has these keys:
 
 Rules by type:
 
-- **`mcp`**: `command` or `target_url`, not both. A `target_url` must be a
+- **`mcp`**: `command` or `target_url`. When both are set, the node uses
+  `target_url` and ignores `command` and `env`. A `target_url` must be a
   Streamable HTTP MCP endpoint.
 - **`inference`**: `target_url` only. It must be the root URL of the backend
   without `/v1`. The node adds the prefix. Callers reach the service through
@@ -128,9 +131,8 @@ Facts available:
 | `role($r)` | The caller's mesh roles. |
 | `label($k, $v)` | The caller's attested labels. |
 | `node($id)`, `client_peer_id($id)`, `expiration($t)` | The caller's credential binding and expiry. |
-| `granted_service_*`, `granted_target_*`, `granted_agent_*` | The caller's grants. |
+| `granted_*`, `http_granted_service_*` | The caller's grants. [Datalog vocabulary](../policy/#datalog-vocabulary) lists them. |
 | `target_fact($name, $value)` | This node's own identity facts, for target matching. |
-| `agent($id)` | The agent the caller says it acts for, when present. |
 | `method($m)`, `path($p)` | The request, when it is HTTP: the method as received and the path as the backend sees it. On a tunnel, `CONNECT` and an empty path. Absent on a stream that carries no HTTP request. |
 | `host($h)`, `port($n)` | The destination of a request for an egress destination. |
 

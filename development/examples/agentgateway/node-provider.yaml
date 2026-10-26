@@ -1,0 +1,9 @@
+# The node that publishes mcp://calc. Its credential comes from a bootstrap
+# token, and the mesh policy grants mesh:role:node allowed_publish mcp://*.
+version: "v1alpha1"
+
+services:
+  - type: mcp
+    name: calc
+    description: "add and multiply"
+    target_url: "http://calc:7777/mcp"

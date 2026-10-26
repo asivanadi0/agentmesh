@@ -75,12 +75,15 @@ notice.
 
 ### Service patterns
 
-`type://name`, where `type` is `mcp`, `inference`, `a2a`, `egress` or
-`system`, and `name` consists of dot-separated DNS-style labels. For
-`egress` the name is the hostname of a destination outside the mesh, written
-lowercase, with no scheme, port or path: `egress://api.github.com/v3` is
-rejected, because the path belongs in the role's `http` entry or a
-`TaskAuthorizationRule`. See [Egress destinations](#egress-destinations).
+`type://name`. The types are `mcp`, `inference`, `a2a`, `egress` and
+`system`. The control plane checks the form of an entry and not the type, so
+a type outside this list passes too. `name` is dot-separated labels, each 1
+to 63 characters of `[a-zA-Z0-9_-]` with no leading `-`. A `/path` after the
+name is part of the name. For `egress` the name is the hostname of a
+destination outside the mesh. It is lowercase, with no scheme, port or path.
+The control plane rejects `egress://api.github.com/v3`, because the path
+belongs in the role's `http` entry or a `TaskAuthorizationRule`. See
+[Egress destinations](#egress-destinations).
 
 | Pattern | Compiles to | Matches |
 |---|---|---|
@@ -159,8 +162,8 @@ Exact entries of one fact are merged into one `granted_target_set` fact.
 | `*` | any label |
 
 Keys match `[a-zA-Z0-9_.-]{1,63}`. Values are up to 255 characters with no
-`,`, `=` or control characters. Every label that a node declares must be
-permitted by a role it holds, or enrollment fails. Manual approval of a
+`,`, `=`, `"`, `\` or control characters. Every label that a node declares
+must be permitted by a role it holds, or enrollment fails. Manual approval of a
 bootstrap enrollment does not bypass this check.
 
 ### HTTP grants
@@ -249,20 +252,20 @@ role and the roles bound to `mesh:system:authenticated` or to its
 
 An entry of `egress` is a destination outside the mesh that selected nodes
 serve as `egress://<name>`. The admin writes it once; each selected node
-receives it at `GET /egress`, registers the service, announces it on the DHT
-and forwards requests to it. Nodes hold no egress configuration of their
-own, and `type: egress` in `agentmesh-node.yaml` is refused.
+receives it at `GET /egress`, registers the service, announces it to the
+directory and forwards requests to it. Nodes hold no egress configuration of
+their own, and `type: egress` in `agentmesh-node.yaml` is refused.
 
 | Field | Meaning |
 |---|---|
-| `name` | The destination hostname, lowercase, without a port or a path. It is the service name in grants (`egress://<name>`) and in the `service()` fact. One hostname; no wildcard. |
+| `name` | Required and unique in the policy. The destination hostname, lowercase, without a port or a path. It is the service name in grants (`egress://<name>`) and in the `service()` fact. One hostname; no wildcard. |
 | `target_url` | Where the serving node forwards HTTP requests. Optional; `https://<name>` when empty. `http` or `https`, no credential, no query. |
-| `served_by` | Role names or `key=value` labels selecting the serving nodes. A node matches when any entry names one of its roles or attested labels. |
-| `credential` | Shorthand for `broker.static_secret`: name of a file in `<--secrets-dir>/<credential>`. Cannot be combined with `broker`. |
+| `served_by` | Role names or `key=value` labels selecting the serving nodes. At least one entry is required. A node matches when any entry names one of its roles or attested labels. |
+| `credential` | Shorthand for `broker.static_secret`: name of a file in `<--secrets-dir>/<credential>`. Cannot be combined with `broker`, unless `broker.static_secret` names the same file. |
 | `broker` | `CredentialBroker` configuring how the egress node obtains the upstream credential. See [Credential brokers](#credential-brokers). |
 | `inspection` | `Inspection` pipeline executed at the egress node before the upstream credential is injected. See [Content inspection](#content-inspection). |
 | `mode` | `EGRESS_MODE_HTTP` (default) or `EGRESS_MODE_TCP` (named `CONNECT` tunnel). |
-| `ports` | Allowed TCP destination ports when `mode` is `EGRESS_MODE_TCP` (for example, `[5432]`). Empty denies every tunnel. |
+| `ports` | Allowed TCP destination ports when `mode` is `EGRESS_MODE_TCP` (for example, `[5432]`). Required in that mode. Each port is from 1 to 65535. |
 | `preserve_host` | Keep the destination hostname (`name`) in the `Host` header when `target_url` points at an operator inspection chain. |
 | `forward_context` | Forward `X-Mesh-Principal`, `X-Mesh-Roles` and `X-Mesh-Task` to `target_url` when `target_url` is an operator inspection chain. |
 
@@ -278,15 +281,15 @@ None of the fields in `broker` is a secret value:
   JWT at the control plane (`POST /sts/token`) and exchanges it at an RFC 8693
   token endpoint:
   - `token_endpoint`: STS URL (for example, `https://sts.googleapis.com/v1/token`).
-  - `audience`: provider audience (for example, a Google Workload or Workforce
-    Identity Pool provider resource name).
+  - `audience`: required. Provider audience (for example, a Google Workload or
+    Workforce Identity Pool provider resource name).
   - `impersonate`: optional Google Cloud service account email or resource URL
     for `iamcredentials.generateAccessToken`.
   - `scopes`: OAuth scopes requested for the upstream token; a
     `TaskAuthorizationRule` can narrow them further, never widen them.
 - **`aws_assume_role`** (`AWSAssumeRole`): mints a border JWT at the control
   plane and calls AWS STS `AssumeRoleWithWebIdentity`:
-  - `role_arn`: IAM role ARN to assume.
+  - `role_arn`: required. IAM role ARN to assume.
   - `session_policy`: optional IAM session policy JSON template intersected with
     the caller's `TaskAuthorizationRule` (`allowed_permissions` $\rightarrow$
     `Action`, `allowed_resources` $\rightarrow$ `Resource`).
@@ -302,14 +305,14 @@ credential:
 - **`model_armor`**: calls Google Cloud Model Armor `sanitizeUserPrompt` and
   (when `response` is `RESPONSE_INSPECTION_BUFFERED`) `sanitizeModelResponse`
   for Gemini, OpenAI chat, MCP `tools/call`, and A2A payloads:
-  - `template`: `projects/<P>/locations/<L>/templates/<T>`.
+  - `template`: required. `projects/<P>/locations/<L>/templates/<T>`.
   - `response`: `RESPONSE_INSPECTION_BUFFERED` (default) or
     `RESPONSE_INSPECTION_REQUEST_ONLY`.
   - `fail_open`: default `false`.
   - `timeout`: per-call timeout (`google.protobuf.Duration`).
 - **`ext_proc`**: streams the request and response to an Envoy external
   processor (`envoy.service.ext_proc.v3.ExternalProcessor`) over HTTP/2 gRPC:
-  - `target`: `host:port` or `unix:/path/to.sock`.
+  - `target`: required. `host:port` or `unix:/path/to.sock`.
   - `ca`, `client_certificate`: optional file names in `--secrets-dir` for TLS /
     mTLS to the processor.
   - `processing_mode`: `request_header_mode`, `response_header_mode`,
@@ -387,14 +390,18 @@ statements.
 | `user`, `email`, `group`, `idp_role` | string | control plane, from OIDC claims |
 | `label` | key, value | control plane |
 | `right` | `relay` | control plane, for routers |
-| `target_unrestricted` | `true` | control plane for routers, and policy rules for roles with `allowed_targets: ["*"]` |
+| `target_unrestricted` | `true` | control plane, for routers. Node rules, for a role with `allowed_targets: ["*"]`. The destination node, for a request from its local API to a service it serves itself. |
+| `target_restricted` | `true` | node rules, for a role with an `allowed_targets` entry other than `*` |
 | `granted_service_exact`, `_set`, `_prefix`, `_suffix`, `_all`, `_all_types` | type, name/set/pattern | control plane and node rules |
+| `granted_publish_exact`, `_set`, `_prefix`, `_suffix`, `_all`, `_all_types` | type, name/set/pattern | control plane and node rules, from `allowed_publish` and `served_by` |
 | `granted_target_exact`, `_set`, `_prefix`, `_suffix`, `_all`, `_all_facts` | fact, value/set/pattern | control plane and node rules |
 | `http_granted_service_exact`, `_prefix`, `_suffix`, `_all`, `_all_types` | type, name/pattern | control plane and node rules, for an `http` entry |
-| `granted_method`, `granted_method_any` | type, key, set | control plane and node rules, for an `http` entry |
-| `granted_path_exact`, `granted_path_prefix`, `granted_path_any` | type, key, set/prefix | control plane and node rules, for an `http` entry |
+| `granted_method` | type, key, set | control plane and node rules, for an `http` entry |
+| `granted_path_exact`, `granted_path_prefix` | type, key, set/prefix | control plane and node rules, for an `http` entry |
+| `granted_method_any`, `granted_path_any` | type, key | control plane and node rules, for an `http` entry with no `methods` or no `paths` |
 | `tar_block` | base64url `TaskAuthorizationRule` | holder, in appended blocks `1..k` |
 | `service` | type, name | destination node, per request |
+| `publish` | type, name | the router before it keeps a directory record, and a caller before it sends to a provider reached by name |
 | `connection_peer_id` | peer ID | destination node, per request |
 | `time` | date | destination node, per request |
 | `method` | string | destination node, on an HTTP request: the method as received; `CONNECT` on a tunnel |

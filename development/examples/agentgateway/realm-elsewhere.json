@@ -1,0 +1,29 @@
+{
+  "realm": "elsewhere",
+  "enabled": true,
+  "accessTokenLifespan": 60,
+  "clients": [
+    {
+      "clientId": "agentmesh",
+      "publicClient": true,
+      "directAccessGrantsEnabled": true
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@example.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Elsewhere",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice-test-only",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

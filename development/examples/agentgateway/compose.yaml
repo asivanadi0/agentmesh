@@ -1,0 +1,127 @@
+# agentgateway in front of an Agent Mesh: two users in two Keycloak groups
+# call one MCP service through agentgateway, which exchanges each caller's
+# token for a mesh credential of that caller at a shared agentmesh-node.
+# run.sh brings this up in order and runs the cases; see README.md.
+#
+# The agentmesh images are pinned to the commit the example was tested
+# with. AGENTMESH_TAG selects another published commit or release, and
+# AGENTMESH_REGISTRY another registry (for images built from this checkout).
+name: agentmesh-agentgateway
+
+x-agentmesh-node: &agentmesh-node
+  image: ${AGENTMESH_REGISTRY:-ghcr.io/google}/agentmesh-node:${AGENTMESH_TAG:-8de8bd76ddfa5c52957c02722b6bce2eac21ec72}
+  depends_on:
+    - router
+  volumes:
+    - ./.run:/run/example:ro
+    - ./node-provider.yaml:/etc/agentmesh/provider.yaml:ro
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.0
+    # start-dev serves plain http and keeps its data in the container: for
+    # this example only. Production Keycloak needs TLS, a database and a
+    # fixed hostname (https://www.keycloak.org/server/configuration-production).
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./realm-mesh.json:/opt/keycloak/data/import/realm-mesh.json:ro
+      - ./realm-elsewhere.json:/opt/keycloak/data/import/realm-elsewhere.json:ro
+    healthcheck:
+      # The image has no HTTP client: ask the management port with bash and
+      # read the status line, so a 503 while the realms import is a failure.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && read -r status <&3 && [[ $$status == *' 200 '* ]]"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  control-plane:
+    image: ${AGENTMESH_REGISTRY:-ghcr.io/google}/agentmesh-control-plane:${AGENTMESH_TAG:-8de8bd76ddfa5c52957c02722b6bce2eac21ec72}
+    command:
+      - --issuer=http://keycloak:8080/realms/mesh
+      - --allowed-audiences=agentmesh
+      - --admin-token-path=/run/example/admin.token
+      - --db-dsn=/data/control-plane.db
+      # The router and the two nodes enroll with single-use bootstrap tokens
+      # run.sh mints with the admin token; approving them as they arrive
+      # spares the script an approval step.
+      - --auto-approve-enrollment
+    volumes:
+      - ./.run:/run/example:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  router:
+    image: ${AGENTMESH_REGISTRY:-ghcr.io/google}/agentmesh-router:${AGENTMESH_TAG:-8de8bd76ddfa5c52957c02722b6bce2eac21ec72}
+    command:
+      - --control-plane=http://control-plane:8080
+      - --insecure-control-plane
+      - --bootstrap-token-path=/run/example/router.token
+      - --keys-path=/data/router.key
+      - --control-plane-sync-interval=10s
+    volumes:
+      - ./.run:/run/example:ro
+    depends_on:
+      - control-plane
+
+  calc:
+    build: ../calc-mcp
+    image: agentmesh-agentgateway/calc-mcp:local
+
+  # Publishes mcp://calc (node-provider.yaml).
+  provider:
+    <<: *agentmesh-node
+    command:
+      - run
+      - --control-plane=http://control-plane:8080
+      - --insecure-control-plane
+      - --bootstrap-token-path=/run/example/provider.token
+      - --config=/etc/agentmesh/provider.yaml
+      - --data-dir=/data
+      - --api-token-path=/run/example/provider-api.token
+      - --discovery-interval=1s
+      - --control-plane-sync-interval=10s
+
+  # The node agentgateway exchanges tokens at and sends requests to. Its own
+  # credential grants no service.
+  gateway:
+    <<: *agentmesh-node
+    command:
+      - run
+      - --control-plane=http://control-plane:8080
+      - --insecure-control-plane
+      - --bootstrap-token-path=/run/example/gateway.token
+      - --data-dir=/data
+      - --bind-addr=0.0.0.0:8080
+      - --api-token-path=/run/example/gateway-api.token
+      - --control-plane-sync-interval=10s
+
+  agentgateway:
+    image: ghcr.io/agentgateway/agentgateway:v1.6.0
+    command: ["-f", "/etc/agentgateway/config.yaml"]
+    volumes:
+      - ./agentgateway.yaml:/etc/agentgateway/config.yaml:ro
+    depends_on:
+      # agentgateway fetches the realm's keys when it starts.
+      keycloak:
+        condition: service_healthy
+
+  # Answers with the request headers it received (echo.py), behind the same
+  # agentgateway policies as the mesh route.
+  echo:
+    # The same image, by digest, as the repository's Python Dockerfiles.
+    image: python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+    command: ["python3", "/echo.py"]
+    volumes:
+      - ./echo.py:/echo.py:ro
+
+  # The HTTP client run.sh uses inside the network, so token issuers and
+  # service names resolve exactly as the components see them.
+  tools:
+    image: curlimages/curl:8.11.1
+    profiles: ["cases"]
+    volumes:
+      - ./:/example:ro

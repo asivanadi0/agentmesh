@@ -1,0 +1,53 @@
+# agentgateway in front of a shared agentmesh-node.
+#
+# jwtAuth validates each caller's Keycloak access token and removes it from
+# the request. The token exchange reads the validated token instead, trades
+# it at the node's /oauth/token (RFC 8693) for a credential of that caller,
+# and sends that credential to the backend in X-Mesh-Authentication. The
+# node needs no client authentication for a JWT subject token, so the
+# gateway holds no secret and no credential of its own.
+#
+# /mesh/ goes to the node's mesh proxy. /echo/ applies the same policies in
+# front of a server that answers with the headers it received, to show what
+# a backend gets.
+config: {}
+binds:
+- port: 3000
+  listeners:
+  - name: default
+    protocol: HTTP
+    routes:
+    - name: mesh
+      matches:
+      - path:
+          pathPrefix: /mesh/
+      policies: &caller-policies
+        jwtAuth:
+          mode: strict
+          issuer: http://keycloak:8080/realms/mesh
+          audiences: [agentmesh]
+          jwks:
+            url: http://keycloak:8080/realms/mesh/protocol/openid-connect/certs
+      backends:
+      - host: gateway:8080
+        policies: &exchange
+          backendAuth:
+            oauthTokenExchange:
+              host: gateway:8080
+              path: /oauth/token
+              subjectToken:
+                tokenType: urn:ietf:params:oauth:token-type:jwt
+                source:
+                  expression: jwt.rawToken.unredacted()
+              authorizationLocation:
+                header:
+                  name: x-mesh-authentication
+                  prefix: "Bearer "
+    - name: echo
+      matches:
+      - path:
+          pathPrefix: /echo/
+      policies: *caller-policies
+      backends:
+      - host: echo:8080
+        policies: *exchange
