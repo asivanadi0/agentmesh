@@ -223,10 +223,10 @@ func TestA2AServeAgentCardRegenerates(t *testing.T) {
 		t.Errorf("streaming = %v, want true as the agent declares it", card.Capabilities.Streaming)
 	}
 	if card.Capabilities.ExtendedAgentCard {
-		t.Error("extendedAgentCard must be off in the regenerated card: the extended card is relayed with the agent's own URLs")
+		t.Errorf("extendedAgentCard = %v, want false in the regenerated card: the extended card is relayed with the agent's own URLs", card.Capabilities.ExtendedAgentCard)
 	}
 	if len(card.Signatures) != 0 {
-		t.Error("stale signatures must be dropped from the regenerated card")
+		t.Errorf("len(signatures) = %d, want 0: stale signatures must be dropped from the regenerated card", len(card.Signatures))
 	}
 	if card.Name != "T" || card.Version != "1.0.0" {
 		t.Errorf("agent identity fields must survive regeneration: %+v", card)

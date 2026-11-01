@@ -227,8 +227,8 @@ func TestA2ACUJ(t *testing.T) {
 	if ext, err := euClient.GetExtendedAgentCard(ctx, &a2a.GetExtendedAgentCardRequest{}); !errors.Is(err, a2a.ErrExtendedCardNotConfigured) {
 		t.Errorf("GetExtendedAgentCard through the mesh = %+v, %v; want %v", ext, err, a2a.ErrExtendedCardNotConfigured)
 	}
-	if extendedCardServed.Load() {
-		t.Error("the agent served its extended card through the mesh")
+	if served := extendedCardServed.Load(); served {
+		t.Errorf("extendedCardServed = %v, want false: the agent served its extended card through the mesh", served)
 	}
 
 	// CUJ step 2b: the card keeps streaming, so the same client may stream
