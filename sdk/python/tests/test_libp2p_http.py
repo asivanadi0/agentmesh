@@ -314,7 +314,7 @@ def test_rewrite_agent_card_keeps_only_what_the_mesh_carries():
 
 
 def test_rewrite_agent_card_declares_no_extended_card():
-    # As agentmesh-node's regenerated card (issue #675): the extended card would come back
+    # Issue #675: agentmesh-node redacts the extended card, but this transport would relay it
     # with the agent's own interface URLs, so the rewritten card declares none.
     iface = {"url": "http://localhost:7777/", "protocolBinding": "JSONRPC"}
     assert rewrite_agent_card({"capabilities": {"streaming": True, "extendedAgentCard": True}, "supportedInterfaces": [iface]}, "http://mesh/x")["capabilities"] == {"streaming": True}

@@ -314,7 +314,7 @@ test("rewriteAgentCard keeps only what the mesh carries", () => {
   });
 });
 
-// As agentmesh-node's regenerated card (issue #675): the extended card would come back
+// Issue #675: agentmesh-node redacts the extended card, but this transport would relay it
 // with the agent's own interface URLs, so the rewritten card declares none.
 test("rewriteAgentCard declares no extended card", () => {
   const iface = { url: "http://localhost:7777/", protocolBinding: "JSONRPC" };

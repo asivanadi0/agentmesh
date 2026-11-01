@@ -414,9 +414,9 @@ function agentCardService(method: string, target: string): string | undefined {
 /**
  * An agent card rebuilt for the mesh, as agentmesh-node's egress proxy serves it:
  * HTTP interfaces resolve under base (meshInterfaceURL), gRPC ones go, signatures no longer match.
- * Streaming stays as declared, this transport streams. The extended card does not: it is
- * relayed with the agent's own interface URLs, so the card declares none. Throws when no
- * interface remains.
+ * Streaming stays as declared, this transport streams. The extended card does not: agentmesh-node
+ * redacts it, but this transport relays it with the agent's own interface URLs, so the card
+ * declares none. Throws when no interface remains.
  */
 export function rewriteAgentCard(card: unknown, base: string): Record<string, unknown> {
   if (typeof card !== "object" || card === null || Array.isArray(card)) {

@@ -417,8 +417,8 @@ def rewrite_agent_card(card: object, base: str) -> dict:
     it: HTTP interfaces resolve under base (mesh_interface_url), gRPC ones go,
     signatures no longer match.
     Streaming stays as declared, this transport streams. The extended card does
-    not: it is relayed with the agent's own interface URLs, so the card declares
-    none. Raises when no interface remains."""
+    not: agentmesh-node redacts it, but this transport relays it with the agent's
+    own interface URLs, so the card declares none. Raises when no interface remains."""
     if not isinstance(card, dict):
         raise ValueError("agent card is not a JSON object")
     interfaces = card.get("supportedInterfaces")
